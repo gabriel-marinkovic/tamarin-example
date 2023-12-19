@@ -1,0 +1,78 @@
+// Toy protocol:
+//      A -> B: anonce
+//      B -> A: bnonce
+//      A installs SK = kdf(anonce, bnonce)
+//      A -> B: "ACK"
+//      B installs SK = kdf(anonce, bnonce)
+//
+// Obviously the attacker can MITM here
+// We can prove `successful_run`, but not `sk_secret_a` or `sk_secret_b`.
+//
+// This example is slightly simplified from:
+// https://github.com/benjaminkiesl/tamarin_toy_protocol/blob/master/toy_protocol_1.spthy
+//
+// We removed the 'INIT' state and replaced ~aID with $A.
+// This allows a much nicer proof for `successful_run`:
+// we can generate a trace where $A and $B communicate normally without
+// interference from the attacker (except for recording messages).
+// The original implementation can only generate a trace where the attacker
+// establishes keys between ($A.1, $B.2) and ($A.2, $B.1).
+//
+// Next stage will add a preshared key between $A and $B.
+
+
+theory toy_protocol
+begin
+
+functions: kdf/2
+builtins: symmetric-encryption
+
+rule ASendNonce:
+    [ Fr(~aNonce) ]
+    --[ ASendsNonce($A, ~aNonce) ]->
+    [ AState($A, 'SENT_NONCE', ~aNonce)
+    , Out(~aNonce) ]
+
+rule BReceiveNonceSendNonce:
+    [ In(aNonce)
+    , Fr(~bNonce) ]
+    --[BReceivesNonceSendsNonce($B, 'SENT_NONCE', <aNonce, ~bNonce>)]->
+    [ BState($B, 'SENT_NONCE', <aNonce, ~bNonce>)
+    , Out(~bNonce) ]
+
+rule AReceiveNonceInstallKey:
+    let
+        SK = kdf(~aNonce, bNonce)
+    in
+    [ AState($A, 'SENT_NONCE', ~aNonce)
+    , In(bNonce) ]
+    --[ AInstallsKey($A, ~aNonce, bNonce, SK) ]->
+    [ AState($A, 'INSTALLED_KEY', <~aNonce, bNonce, SK>)
+    , Out('ACK') ]
+
+rule BReceiveAckInstallKey:
+    let
+        SK = kdf(aNonce, ~bNonce)
+    in
+    [ BState($B, 'SENT_NONCE', <aNonce, ~bNonce>)
+    , In('ACK') ]
+    --[ BInstallsKey($B, aNonce, ~bNonce, SK) ]->
+    [ BState($B, 'INSTALLED_KEY', <aNonce, ~bNonce, SK>) ]
+
+
+lemma successful_run: exists-trace
+    "Ex A B aNonce bNonce SK #i #j.
+        AInstallsKey(A, aNonce, bNonce, SK) @ #i &
+        BInstallsKey(B, aNonce, bNonce, SK) @ #j"
+
+lemma sk_secret_a:
+    "All A aNonce bNonce SK #i.
+        AInstallsKey(A, aNonce, bNonce, SK) @ #i
+            ==> not(Ex #j. K(SK) @ #j)"
+
+lemma sk_secret_b:
+    "All B aNonce bNonce SK #i.
+        BInstallsKey(B, aNonce, bNonce, SK) @ #i
+            ==> not(Ex #j. K(SK) @ #j)"
+
+end
