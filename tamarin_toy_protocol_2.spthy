@@ -1,0 +1,80 @@
+// In this example the attacker can't find out the session key
+// by using a preshared key between A and B.
+// However, It's possible for B to install a session key
+// thinking that A installed it, when in fact it didn't
+// (because the attacker can send ACK in place if A).
+//
+// Next stage will add a MAC.
+
+
+theory toy_protocol
+begin
+
+functions: kdf/2
+builtins: symmetric-encryption
+
+
+rule PreshareKey:
+    [ Fr(~preshared) ]
+    --[ PresharedKey($A, $B, ~preshared) ]->
+    [ AState($A, 'HAVE_PRESHARED_KEY', ~preshared)
+    , BState($B, 'HAVE_PRESHARED_KEY', ~preshared) ]
+
+rule ASendNonce:
+    [ AState($A, 'HAVE_PRESHARED_KEY', ~preshared)
+    , Fr(~aNonce) ]
+    --[ ASendsNonce($A, ~aNonce) ]->
+    [ AState($A, 'SENT_NONCE', <~preshared, ~aNonce>)
+    , Out(senc(~aNonce, ~preshared)) ]
+
+rule BReceiveNonceSendNonce:
+    [ BState($B, 'HAVE_PRESHARED_KEY', ~preshared)
+    , In(senc(aNonce, ~preshared))
+    , Fr(~bNonce) ]
+    --[BReceivesNonceSendsNonce($B, 'SENT_NONCE', <aNonce, ~bNonce>)]->
+    [ BState($B, 'SENT_NONCE', <~preshared, aNonce, ~bNonce>)
+    , Out(senc(~bNonce, ~preshared)) ]
+
+rule AReceiveNonceInstallKey:
+    let
+        SK = kdf(~aNonce, bNonce)
+    in
+    [ AState($A, 'SENT_NONCE', <~preshared, ~aNonce>)
+    , In(senc(bNonce, ~preshared)) ]
+    --[ AInstallsKey($A, ~aNonce, bNonce, SK) ]->
+    [ AState($A, 'INSTALLED_KEY', <~aNonce, bNonce, SK>)
+    , Out('ACK') ]
+
+rule BReceiveAckInstallKey:
+    let
+        SK = kdf(aNonce, ~bNonce)
+    in
+    [ BState($B, 'SENT_NONCE', <~preshared, aNonce, ~bNonce>)
+    , In('ACK') ]
+    --[ BInstallsKey($B, aNonce, ~bNonce, SK) ]->
+    [ BState($B, 'INSTALLED_KEY', <aNonce, ~bNonce, SK>) ]
+
+
+lemma successful_run: exists-trace
+    "Ex A B aNonce bNonce SK #i #j.
+        AInstallsKey(A, aNonce, bNonce, SK) @ #i &
+        BInstallsKey(B, aNonce, bNonce, SK) @ #j"
+
+lemma sk_secret_a:
+    "All A aNonce bNonce SK #i.
+        AInstallsKey(A, aNonce, bNonce, SK) @ #i
+            ==> not(Ex #j. K(SK) @ #j)"
+
+lemma sk_secret_b:
+    "All B aNonce bNonce SK #i.
+        BInstallsKey(B, aNonce, bNonce, SK) @ #i
+            ==> not(Ex #j. K(SK) @ #j)"
+
+lemma if_b_installed_a_installed_too:
+    "All B aNonce bNonce SK #i.
+        BInstallsKey(B, aNonce, bNonce, SK) @ #i
+            ==> (Ex A #j.
+                (AInstallsKey(A, aNonce, bNonce, SK) @ #j) & #j < #i)"
+
+
+end
