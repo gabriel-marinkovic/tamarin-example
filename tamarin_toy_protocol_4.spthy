@@ -1,0 +1,90 @@
+// This example adds a retry mechanism where A retries sending a nonce.
+// I couldn't get the proof for `successful_run` to compile.
+
+theory toy_protocol
+begin
+
+functions: kdf/2, mac/2
+builtins: symmetric-encryption
+
+
+rule PreshareKey:
+    [ Fr(~preshared) ]
+    --[ PresharedKey($A, $B, ~preshared) ]->
+    [ AState($A, 'HAVE_PRESHARED_KEY', ~preshared)
+    , BState($B, 'HAVE_PRESHARED_KEY', ~preshared) ]
+
+rule ASendNonce:
+    [ AState($A, 'HAVE_PRESHARED_KEY', ~preshared)
+    , Fr(~aNonce) ]
+    --[ ASendsNonce($A, ~preshared, ~aNonce) ]->
+    [ AState($A, 'SENT_NONCE', <~preshared, ~aNonce>)
+    , Out(senc(~aNonce, ~preshared)) ]
+
+rule ASendNonceAgain:
+        [ AState($A, 'SENT_NONCE', <~preshared, ~aNonce>) ]
+        --[ ASendsNonceAgain($A, ~preshared, ~aNonce) ]->
+        [ AState($A, 'SENT_NONCE', <~preshared, ~aNonce>)
+        , Out(senc(~aNonce, ~preshared)) ]
+
+rule BReceiveNonceSendNonce:
+    let
+        bNonceMsg = <senc(~bNonce, ~preshared), mac(~preshared, senc(~bNonce, ~preshared))>
+    in
+        [ BState($B, 'HAVE_PRESHARED_KEY', ~preshared)
+        , In(senc(aNonce, ~preshared))
+        , Fr(~bNonce) ]
+        --[ BReceivesNonceSendsNonce(
+            $B, ~preshared, 'SENT_NONCE', <aNonce, ~bNonce>) ]->
+        [ BState($B, 'SENT_NONCE', <~preshared, aNonce, ~bNonce>)
+        , Out(bNonceMsg) ]
+
+rule AReceiveNonceInstallKey:
+    let
+        SK = kdf(~aNonce, bNonce)
+        bNonceMsg = <senc(bNonce, ~preshared), mac(~preshared, senc(bNonce, ~preshared))>
+    in
+    [ AState($A, 'SENT_NONCE', <~preshared, ~aNonce>)
+    , In(bNonceMsg) ]
+    --[ AInstallsKey($A, ~preshared, ~aNonce, bNonce, SK) ]->
+    [ AState($A, 'INSTALLED_KEY', <~aNonce, bNonce, SK>)
+    , Out(mac(SK, 'ACK')) ]
+
+rule BReceiveAckInstallKey:
+    let
+        SK = kdf(aNonce, ~bNonce)
+    in
+    [ BState($B, 'SENT_NONCE', <~preshared, aNonce, ~bNonce>)
+    , In(mac(SK, 'ACK')) ]
+    --[ BInstallsKey($B, ~preshared, aNonce, ~bNonce, SK) ]->
+    [ BState($B, 'INSTALLED_KEY', <aNonce, ~bNonce, SK>) ]
+
+
+lemma a_must_send_initial_nonce:
+    "All preshared A aNonce #i.
+        ASendsNonceAgain(A, preshared, aNonce) @ #i
+            ==> Ex #j. ASendsNonce(A, preshared, aNonce) @ #j & #j < #i"
+
+lemma successful_run: exists-trace
+    "Ex preshared A B aNonce bNonce SK #i #j.
+        AInstallsKey(A, preshared, aNonce, bNonce, SK) @ #i &
+        BInstallsKey(B, preshared, aNonce, bNonce, SK) @ #j"
+
+lemma sk_secret_a:
+    "All preshared A aNonce bNonce SK #i.
+        AInstallsKey(A, preshared, aNonce, bNonce, SK) @ #i
+            ==> not(Ex #j. K(SK) @ #j)"
+
+lemma sk_secret_b:
+    "All preshared B aNonce bNonce SK #i.
+        BInstallsKey(B, preshared, aNonce, bNonce, SK) @ #i
+            ==> not(Ex #j. K(SK) @ #j)"
+
+lemma if_b_installed_a_installed_too:
+    "All preshared B aNonce bNonce SK #i.
+        BInstallsKey(B, preshared, aNonce, bNonce, SK) @ #i
+            ==> (Ex A #j.
+                (AInstallsKey(A, preshared, aNonce, bNonce, SK) @ #j) & #j < #i)"
+
+
+end
